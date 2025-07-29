@@ -25,16 +25,19 @@ function broadcast(data) {
 }
 
 // Collect system information
-async function collectSystemInfo() {
+async function collectDetailedSystemInfo() {
   try {
-    const [cpu, mem, net, disk, temp, os] = await Promise.all([
-      si.currentLoad(),
-      si.mem(),
-      si.networkStats(),
-      si.fsSize(),
-      si.cpuTemperature(),
-      si.osInfo(),
-    ]);
+    const [cpu, mem, net, disk, temp, os, processes, diskIO] =
+      await Promise.all([
+        si.currentLoad(),
+        si.mem(),
+        si.networkStats(),
+        si.fsSize(),
+        si.cpuTemperature(),
+        si.osInfo(),
+        si.processes(),
+        si.disksIO(),
+      ]);
 
     return {
       timestamp: Date.now(),
@@ -42,30 +45,88 @@ async function collectSystemInfo() {
         platform: os.platform,
         distro: os.distro,
         release: os.release,
+        kernel: os.kernel,
+        arch: os.arch,
       },
       cpu: {
-        load: cpu.currentLoad.toFixed(2),
+        load: {
+          current: cpu.currentLoad.toFixed(2),
+          user: cpu.currentLoadUser.toFixed(2),
+          system: cpu.currentLoadSystem.toFixed(2),
+          idle: cpu.currentLoadIdle.toFixed(2),
+        },
         cores: cpu.cpus.map((core) => ({
           load: core.load.toFixed(2),
+          loadUser: core.loadUser.toFixed(2),
+          loadSystem: core.loadSystem.toFixed(2),
         })),
       },
       memory: {
         total: mem.total,
         used: mem.used,
         free: mem.free,
+        active: mem.active,
+        available: mem.available,
+        swap: {
+          total: mem.swaptotal,
+          used: mem.swapused,
+          free: mem.swapfree,
+        },
         usedPercent: ((mem.used / mem.total) * 100).toFixed(2),
       },
-      network: {
-        download: (net[0].rx_sec / 1024 / 1024).toFixed(2), // Convert to MB/s
-        upload: (net[0].tx_sec / 1024 / 1024).toFixed(2), // Convert to MB/s
-      },
-      storage: disk.map((d) => ({
-        drive: d.mount,
-        size: d.size,
-        used: d.used,
-        usedPercent: ((d.used / d.size) * 100).toFixed(2),
+      network: net.map((interface) => ({
+        interface: interface.iface,
+        state: interface.operstate,
+        rx: {
+          bytes: interface.rx_bytes,
+          dropped: interface.rx_dropped,
+          errors: interface.rx_errors,
+          sec: (interface.rx_sec / 1024 / 1024).toFixed(2), // MB/s
+        },
+        tx: {
+          bytes: interface.tx_bytes,
+          dropped: interface.tx_dropped,
+          errors: interface.tx_errors,
+          sec: (interface.tx_sec / 1024 / 1024).toFixed(2), // MB/s
+        },
       })),
-      temperature: temp.main ? temp.main.toFixed(2) : "N/A",
+      storage: {
+        drives: disk.map((d) => ({
+          filesystem: d.fs,
+          type: d.type,
+          mount: d.mount,
+          size: d.size,
+          used: d.used,
+          available: d.available,
+          usedPercent: ((d.used / d.size) * 100).toFixed(2),
+        })),
+        io: {
+          readIO: diskIO?.rIO,
+          writeIO: diskIO?.wIO,
+          readIO_sec: diskIO?.rIO_sec,
+          writeIO_sec: diskIO?.wIO_sec,
+        },
+      },
+      processes: {
+        all: processes.all,
+        running: processes.running,
+        blocked: processes.blocked,
+        sleeping: processes.sleeping,
+        list: processes.list.slice(0, 10).map((p) => ({
+          // Top 10 processes
+          pid: p.pid,
+          name: p.name,
+          cpu: p.cpu,
+          mem: p.mem,
+          priority: p.priority,
+          state: p.state,
+        })),
+      },
+      temperature: {
+        main: temp.main ? temp.main.toFixed(2) : "N/A",
+        cores: temp.cores ? temp.cores.map((t) => t.toFixed(2)) : [],
+        max: temp.max ? temp.max.toFixed(2) : "N/A",
+      },
     };
   } catch (error) {
     console.error("Error collecting system info:", error);
@@ -93,7 +154,7 @@ let monitoringInterval;
 
 function startMonitoring() {
   monitoringInterval = setInterval(async () => {
-    const data = await collectSystemInfo();
+    const data = await collectDetailedSystemInfo();
     if (data) {
       broadcast(data);
     }
